@@ -46,6 +46,43 @@ type Options struct {
 	IV      []byte // 自定义初始化偏移量，需要与区块（AES区块长度固定 128 bit）长度一致：16
 }
 
+type ecb struct {
+	b         cipher.Block
+	blockSize int
+}
+
+func (e *ecb) BlockSize() int {
+	return e.blockSize
+}
+
+func (e *ecb) CryptBlocks(dst, src []byte) {
+	if len(src)%e.blockSize != 0 {
+		panic("crypto/cipher: input not full blocks")
+	}
+	if len(dst) < len(src) {
+		panic("crypto/cipher: output smaller than input")
+	}
+	for len(src) > 0 {
+		e.b.Encrypt(dst, src[:e.blockSize])
+		src = src[e.blockSize:]
+		dst = dst[e.blockSize:]
+	}
+}
+
+func (e *ecb) DecryptBlocks(dst, src []byte) {
+	if len(src)%e.blockSize != 0 {
+		panic("crypto/cipher: input not full blocks")
+	}
+	if len(dst) < len(src) {
+		panic("crypto/cipher: output smaller than input")
+	}
+	for len(src) > 0 {
+		e.b.Decrypt(dst, src[:e.blockSize])
+		src = src[e.blockSize:]
+		dst = dst[e.blockSize:]
+	}
+}
+
 // NewOptions 创建默认配置项
 func NewOptions(key, iv []byte) *Options {
 	return &Options{
@@ -133,7 +170,7 @@ func (a *AES) Decrypt(data string) (s string, err error) {
 func padding(way Padding, data []byte) ([]byte, error) {
 	switch way {
 	case PKCS5Padding:
-		return pkcs5Padding(data), nil
+		return pkcs5Padding(data, aes.BlockSize), nil
 	case PKCS7Padding:
 		return pkcs7Padding(data, aes.BlockSize), nil
 	default:
@@ -155,8 +192,8 @@ func unPadding(data []byte) ([]byte, error) {
 }
 
 // pkcs5Padding
-func pkcs5Padding(data []byte) []byte {
-	return pkcs7Padding(data, 8)
+func pkcs5Padding(data []byte, blockSize int) []byte {
+	return pkcs7Padding(data, blockSize)
 }
 
 // pkcs7Padding
@@ -166,12 +203,21 @@ func pkcs7Padding(data []byte, blockSize int) []byte {
 	return append(data, padText...)
 }
 
+func newECB(b cipher.Block) *ecb {
+	return &ecb{
+		b:         b,
+		blockSize: b.BlockSize(),
+	}
+}
+
 // ecbEncrypt ECB加密模式
 func ecbEncrypt(block cipher.Block, paddingData []byte, output Output) (string, error) {
+	// 加密模式
+	blockMode := newECB(block)
 	// 密文切片
 	ciphertext := make([]byte, len(paddingData))
 	// 加密
-	block.Encrypt(ciphertext, paddingData)
+	blockMode.CryptBlocks(ciphertext, paddingData)
 	// 输出
 	return encryptOutput(output, ciphertext)
 }
@@ -226,10 +272,12 @@ func cfbEncrypt(block cipher.Block, paddingData []byte, iv []byte, output Output
 
 // ecbDecrypt ECB模式
 func ecbDecrypt(block cipher.Block, ciphertext []byte) (string, error) {
+	// 模式
+	blockMode := newECB(block)
 	// 创建数组
 	plaintext := make([]byte, len(ciphertext))
 	// 解密
-	block.Decrypt(plaintext, ciphertext)
+	blockMode.DecryptBlocks(plaintext, ciphertext)
 	// 输出
 	return decryptOutput(plaintext)
 }
